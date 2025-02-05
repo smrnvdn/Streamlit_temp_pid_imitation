@@ -11,7 +11,7 @@ st.set_page_config(layout="wide")
 TEMP_PARAMS = {
     't_out': -5.8,  # Целевая температура
     'k': 0.3,       # Коэффициент нагрева/охлаждения
-    'T0': -13.0     # Начальная температура - добавляем .0 для явного указания float
+    'T0': -13.0     # Начальная температура
 }
 
 # Границы допустимой температуры
@@ -45,7 +45,7 @@ def control_temperature(current_temp: float = -7, n_iterations: int = 100, temp_
     Функция контроля температуры
     """
     temperature_history = []
-    mode = 'heat'  # Начальный режим работы
+    mode = 'heat'  # Режим нагрева
 
     for _ in range(n_iterations):
         temperature_history.append(current_temp)
@@ -75,11 +75,11 @@ def control_temperature(current_temp: float = -7, n_iterations: int = 100, temp_
 # Заголовок приложения
 st.title('Температурный контроль')
 
-# Создаем две колонки: одну для параметров, другую для графика
-col_params, col_graph = st.columns([0.25, 0.75])  # Уменьшаем ширину колонки с параметрами
-
+# Две колонки: одна для параметров, другая для графика
+col_params, col_graph = st.columns([0.25, 0.75])
 with col_params:
     st.markdown('##### Параметры системы')
+
 
     # Параметры моделирования
     temp_params = {
@@ -89,7 +89,7 @@ with col_params:
             max_value=0.0,
             value=float(TEMP_PARAMS['t_out']),
             step=0.1,
-            help='Конечная температура нагрева',
+            help='Конечная температура нагрева/охлаждения',
             key='t_out_input'
         ),
         'k': st.number_input(
@@ -144,9 +144,9 @@ with col_params:
 
     current_temp = st.slider(
         'Текущая температура (°C)',
-        min_value=-13.0,
-        max_value=-5.8,
-        value=-7.0,
+        min_value=temp_min,
+        max_value=temp_max,
+        value=min(max(temp_min, -7.0), temp_max),
         step=0.1,
         help='Текущая температура системы'
     )
