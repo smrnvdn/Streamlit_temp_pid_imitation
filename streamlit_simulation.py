@@ -96,22 +96,53 @@ def control_temperature(current_temp: float = -7, n_iterations: int = 100, temp_
 st.title('Температурный контроль')
 
 def to_excel():
-    # Создаем DataFrame с данными
-    df = pd.DataFrame({
+    # Создаем DataFrame с данными температур
+    df_temps = pd.DataFrame({
         'Время (итерации)': range(len(temperature_history)),
         'Температура': temperature_history,
         'Максимальная температура': [temp_max] * len(temperature_history),
         'Минимальная температура': [temp_min] * len(temperature_history)
     })
 
+    # Создаем DataFrame с параметрами системы
+    df_params = pd.DataFrame({
+        'Параметр': [
+            'Количество итераций',
+            'Минимальная температура (°C)',
+            'Максимальная температура (°C)',
+            'Начальная температура (°C)',
+            'Целевая температура нагрева (°C)',
+            'Коэффициент нагрева',
+            'Начальная температура нагрева (°C)',
+            'Целевая температура охлаждения (°C)',
+            'Коэффициент охлаждения',
+            'Начальная температура охлаждения (°C)',
+        ],
+        'Значение': [
+            n_iterations,
+            temp_min,
+            temp_max,
+            current_temp,
+            temp_params['heat']['t_out'],
+            temp_params['heat']['k'],
+            temp_params['heat']['T0'],
+            temp_params['cool']['t_out'],
+            temp_params['cool']['k'],
+            temp_params['cool']['T0'],
+        ]
+    })
+
     # Создаем буфер в памяти для Excel файла
     buffer = BytesIO()
     with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-        df.to_excel(writer, sheet_name='Температурный контроль', index=False)
+        # Записываем данные на разные листы
+        df_temps.to_excel(writer, sheet_name='Температурный контроль', index=False)
+        df_params.to_excel(writer, sheet_name='Параметры системы', index=False)
 
-        # Получаем объект workbook и worksheet
+        # Получаем объект workbook и worksheet'ы
         workbook = writer.book
-        worksheet = writer.sheets['Температурный контроль']
+        worksheet_temps = writer.sheets['Температурный контроль']
+        worksheet_params = writer.sheets['Параметры системы']
 
         # Добавляем форматирование
         header_format = workbook.add_format({
@@ -121,10 +152,15 @@ def to_excel():
             'border': 1
         })
 
-        # Применяем форматирование к заголовкам
-        for col_num, value in enumerate(df.columns.values):
-            worksheet.write(0, col_num, value, header_format)
-            worksheet.set_column(col_num, col_num, 15)  # Устанавливаем ширину столбцов
+        # Применяем форматирование к заголовкам на листе температур
+        for col_num, value in enumerate(df_temps.columns.values):
+            worksheet_temps.write(0, col_num, value, header_format)
+            worksheet_temps.set_column(col_num, col_num, 15)
+
+        # Применяем форматирование к заголовкам на листе параметров
+        for col_num, value in enumerate(df_params.columns.values):
+            worksheet_params.write(0, col_num, value, header_format)
+            worksheet_params.set_column(col_num, col_num, 30)  # Увеличиваем ширину для читаемости
 
     return buffer
 
@@ -313,7 +349,10 @@ with col_graph:
         ),
         hovermode='x unified',
         height=graph_height,  # Используем значение из слайдера
-        margin=dict(t=20, b=20, l=20, r=20)
+        margin=dict(t=20, b=20, l=20, r=20),
+        # Добавляем возможность рисовать аннотации
+        newshape=dict(line_color='red'),
+        modebar_add=['drawline', 'drawopenpath', 'eraseshape']
     )
 
     # Отображаем график на всю ширину контейнера
