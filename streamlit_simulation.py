@@ -165,10 +165,9 @@ def to_excel():
     return buffer
 
 # Две колонки: одна для параметров, другая для графика
-col_params, col_graph = st.columns([0.25, 0.75])
+col_params, col_graph = st.columns([0.22, 0.78])
 with col_params:
     st.markdown('##### Параметры системы')
-
     # Параметры симуляции
     n_iterations = st.slider(
         'Количество итераций',
@@ -206,9 +205,39 @@ with col_params:
         help='Текущая температура системы'
     )
 
-    st.divider()
+    # Добавляем выбор ступени производительности
+    performance_level = st.radio(
+        "Ступень производительности",
+        options=["Стандартная", "Ступень 1", "Ступень 2", "Ступень 3", "Ступень 4"],
+        index=0,
+        help="Выберите ступень производительности системы"
+    )
 
-    # Параметры моделирования в выпадающем списке
+
+    # Определяем параметры для разных ступеней производительности
+    PERFORMANCE_PARAMS = {
+        "Стандартная": {
+            'heat': {'k': 0.3},
+            'cool': {'k': 0.3}
+        },
+        "Ступень 1": {
+            'heat': {'k': 0.3},
+            'cool': {'k': 0.03}
+        },
+        "Ступень 2": {
+            'heat': {'k': 0.3},
+            'cool': {'k': 0.06}
+        },
+        "Ступень 3": {
+            'heat': {'k': 0.3},
+            'cool': {'k': 0.09}
+        },
+        "Ступень 4": {
+            'heat': {'k': 0.3},
+            'cool': {'k': 0.12}
+        }
+    }
+
     with st.expander("Дополнительные параметры"):
         temp_params = {
             'heat': {
@@ -223,10 +252,10 @@ with col_params:
                 ),
                 'k': st.number_input(
                     'Коэффициент нагрева',
-                    min_value=0.1,
+                    min_value=0.01,
                     max_value=1.0,
-                    value=float(TEMP_PARAMS['heat']['k']),
-                    step=0.1,
+                    value=PERFORMANCE_PARAMS[performance_level]['heat']['k'],
+                    step=0.01,
                     help='Скорость нагрева',
                     key='k_heat_input'
                 ),
@@ -252,10 +281,10 @@ with col_params:
                 ),
                 'k': st.number_input(
                     'Коэффициент охлаждения',
-                    min_value=0.1,
+                    min_value=0.01,
                     max_value=1.0,
-                    value=float(TEMP_PARAMS['cool']['k']),
-                    step=0.1,
+                    value=PERFORMANCE_PARAMS[performance_level]['cool']['k'],
+                    step=0.01,
                     help='Скорость охлаждения',
                     key='k_cool_input'
                 ),
@@ -290,7 +319,6 @@ with col_params:
             mime='application/vnd.ms-excel'
         )
 
-    st.divider()
 
 with col_graph:
     # Добавляем слайдер для управления высотой графика
@@ -306,12 +334,15 @@ with col_graph:
     # Создаем график с помощью Plotly
     fig = go.Figure()
 
-    # Добавляем основную линию температуры
+    # Определяем цвет линии в зависимости от ступени
+    line_color = 'blue' if performance_level == "Стандартная" else 'red'
+
+    # Добавляем основную линию температуры с соответствующим цветом
     fig.add_trace(go.Scatter(
         x=list(range(len(temperature_history))),
         y=temperature_history,
-        name='Температура',
-        line=dict(width=2)
+        name=f'Температура ({performance_level})',
+        line=dict(width=2, color=line_color)
     ))
 
     # Добавляем линии минимальной и максимальной температуры
