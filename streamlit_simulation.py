@@ -189,11 +189,11 @@ with col_params:
 
     temp_max = st.slider(
         'Максимальная температура (°C)',
-        min_value=-9.0,
+        min_value=temp_min + 0.1,  # Гарантируем, что temp_max строго больше temp_min
         max_value=-5.8,
-        value=-6.0,
+        value=-6.0 if -6.0 > temp_min else temp_min + 0.1,
         step=0.1,
-        help='Максимальная допустимая температура'
+        help='Максимальная температура (должна быть больше минимальной)'
     )
 
     current_temp = st.slider(
