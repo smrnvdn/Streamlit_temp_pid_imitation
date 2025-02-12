@@ -138,7 +138,8 @@ def create_plot(temperature_history, temperature_history_pid, num_steps_lst, err
         x=list(range(len(temperature_history))),
         y=temperature_history,
         name='Температура',
-        line=dict(width=2, color='blue', visible='legendonly')
+        line=dict(width=2, color='blue'),
+        visible='legendonly'
     ))
 
     fig.add_trace(go.Scatter(
