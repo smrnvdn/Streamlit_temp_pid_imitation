@@ -229,7 +229,6 @@ with col_params:
         Kp_input = st.number_input("Kp", value=1.0, step=0.1, format="%.3f")
         Ki_input = st.number_input("Ki", value=1.0, step=0.01, format="%.4f")
         dt_input = st.number_input("dt", value=1, step=1, min_value=1)
-        # Kd_input = st.number_input("Kd", value=0.0, step=0.01, format="%.3f")
 
     # Параметры температуры
     TEMP_PARAMS = {
@@ -245,10 +244,16 @@ with col_params:
                 'T0': st.number_input('Начальная температура нагрева (°C)', -15.0, 0.0, float(temp_min), 0.1)
             }
         }
+        # Добавляем параметры охлаждения
+        temp_params['cool'] = {
+            't_out': float(temp_min),
+            'k': float(PERFORMANCE_PARAMS["Стандартная"]['cool']['k']),
+            'T0': float(temp_max)
+        }
 
 # Расчеты
-f_lst_heat = generate_temp_array(TEMP_PARAMS, is_heating=True)
-f_lst_cool = generate_temp_array(TEMP_PARAMS, is_heating=False)
+f_lst_heat = generate_temp_array(temp_params, is_heating=True)
+f_lst_cool = generate_temp_array(temp_params, is_heating=False)
 
 temperature_history = control_temperature(current_temp, n_iterations, temp_min, temp_max)
 
