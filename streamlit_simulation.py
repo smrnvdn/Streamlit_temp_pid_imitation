@@ -4,83 +4,117 @@ import plotly.graph_objects as go
 import pandas as pd
 from io import BytesIO
 
-# Добавляем настройку широкого layout'а в начало файла
+# Настройка интерфейса
 st.set_page_config(layout="wide")
-
-# Уменьшаем отступ от заголовка
 st.markdown("""
 <style>
-    .block-container {
-        padding-top: 1rem;
-    }
+    .block-container { padding-top: 1rem; }
 </style>
 """, unsafe_allow_html=True)
 
-# Общие параметры для расчета температуры
-TEMP_PARAMS = {
-    'heat': {
-        't_out': -5.8,  # Целевая температура нагрева
-        'k': 0.3,       # Коэффициент нагрева
-        'T0': -13.0     # Начальная температура для нагрева
-    },
-    'cool': {
-        't_out': -9.0,  # Целевая температура охлаждения
-        'k': 0.3,       # Коэффициент охлаждения
-        'T0': -5.8       # Начальная температура для охлаждения
-    }
+# Базовые параметры системы
+PERFORMANCE_PARAMS = {
+    "Стандартная": {'heat': {'k': 0.3}, 'cool': {'k': 0.3}},
+    "Ступень 1": {'cool': {'k': 0.05}},
+    "Ступень 2": {'cool': {'k': 0.1}},
+    "Ступень 3": {'cool': {'k': 0.2}},
+    "Ступень 4": {'cool': {'k': 0.3}}
 }
 
-# Границы допустимой температуры
-TEMP_LIMITS = {
-    'min': -9,
-    'max': -6
-}
-
-def generate_temp_array(params: dict, is_heating: bool = True, n_points: int = 100) -> np.ndarray:
-    """
-    Генерирует массив температур на основе заданных параметров
-    Args:
-        params: словарь с параметрами
-        is_heating: True для нагрева, False для охлаждения
-        n_points: количество точек
-    """
+def generate_temp_array(params: dict, is_heating: bool = True, n_points: int = 1000) -> np.ndarray:
+    """Генерирует массив температур на основе экспоненциальной модели"""
     mode = 'heat' if is_heating else 'cool'
-    params = params[mode]  # Получаем параметры для нужного режима
-
-    t_out = params['t_out']
-    t0 = params['T0']
-
+    params = params[mode]
     return np.array([
-        t_out + np.exp(-params['k'] * i / 2) * (t0 - t_out)
+        params['t_out'] + np.exp(-params['k'] * i / 2) * (params['T0'] - params['t_out'])
         for i in range(n_points)
     ]).round(2)
 
-# Создаем массивы температур для нагрева и охлаждения
-f_lst_heat = generate_temp_array(TEMP_PARAMS, is_heating=True)
-f_lst_cool = generate_temp_array(TEMP_PARAMS, is_heating=False)
+def control_temperature(current_temp: float, n_iterations: int, temp_min: float, temp_max: float) -> list:
+    """Стандартный контроль температуры"""
+    temperature_history = [current_temp]
+    mode = 'heat'
 
-def control_temperature(current_temp: float = -7, n_iterations: int = 100, temp_min: float = -9, temp_max: float = -6) -> list:
-    """
-    Функция контроля температуры
-    """
-    temperature_history = [current_temp]  # Добавляем начальную температуру
-    mode = 'heat'  # Режим нагрева
-
-    for _ in range(n_iterations - 1):  # Уменьшаем на 1, так как начальная точка уже добавлена
+    for _ in range(n_iterations - 1):
         if mode == 'heat':
             if current_temp >= temp_max:
                 mode = 'cool'
                 continue
-
             mask = f_lst_heat > current_temp
             if not np.any(mask):
                 break
             current_temp = f_lst_heat[mask][0]
-
-        else:  # mode == 'cool'
+        else:
             if current_temp <= temp_min:
                 mode = 'heat'
                 continue
+            mask = f_lst_cool < current_temp
+            if not np.any(mask):
+                mode = 'heat'
+                continue
+            current_temp = f_lst_cool[mask][0]
+        temperature_history.append(current_temp)
+
+    return temperature_history
+
+def control_temperature_combined(current_temp: float, n_iterations: int, temp_min: float, temp_max: float,
+                               pid_setpoint: float, Kp: float, Ki: float, TEMP_PARAMS: dict, dt: float) -> tuple:
+    """Комбинированный контроль температуры с ПИД-регулятором"""
+    temperature_history = [current_temp]
+    mode = "heat"
+    steps_lst = []
+    errors_lst = []
+    sum_of_steps = 0
+    dt_counter = []
+
+    for _ in range(n_iterations - 1):
+        if mode == "heat":
+            if current_temp >= temp_max:
+                mode = "cool"
+                dt_counter = []
+            else:
+                mask = f_lst_heat > current_temp
+                if not np.any(mask):
+                    break
+                current_temp = f_lst_heat[mask][0]
+                temperature_history.append(current_temp)
+                steps_lst.append(temp_min)
+                errors_lst.append(0)
+                continue
+
+        if mode == "cool":
+            if current_temp <= temp_min:
+                mode = "heat"
+                continue
+
+            error = max(current_temp - pid_setpoint, 0)
+            dt_counter.append(error)
+            pid_output = Kp * error + Ki * sum(dt_counter)
+
+            if len(dt_counter) > dt:
+                dt_counter.pop(0)
+
+            # Определение ступени охлаждения
+            if pid_output > 0.6:
+                num_steps, performance_level = 4, 'Ступень 4'
+            elif pid_output > 0.3:
+                num_steps, performance_level = 3, 'Ступень 3'
+            elif pid_output > 0.15:
+                num_steps, performance_level = 2, 'Ступень 2'
+            else:
+                num_steps, performance_level = 1, 'Ступень 1'
+
+            errors_lst.append(pid_output)
+
+            # Обновление параметров охлаждения
+            temp_params_pid = {
+                'cool': {
+                    't_out': float(TEMP_PARAMS['cool']['t_out']),
+                    'k': float(PERFORMANCE_PARAMS[performance_level]['cool']['k']),
+                    'T0': float(TEMP_PARAMS['cool']['T0']),
+                }
+            }
+            f_lst_cool = generate_temp_array(temp_params_pid, is_heating=False)
 
             mask = f_lst_cool < current_temp
             if not np.any(mask):
@@ -88,303 +122,144 @@ def control_temperature(current_temp: float = -7, n_iterations: int = 100, temp_
                 continue
             current_temp = f_lst_cool[mask][0]
 
-        temperature_history.append(current_temp)  # Добавляем точку после изменения температуры
+            temperature_history.append(current_temp)
+            steps_lst.append(num_steps + temp_min)
+            sum_of_steps += num_steps
 
-    return temperature_history
+    return temperature_history, steps_lst, errors_lst, sum_of_steps
 
-# Заголовок приложения
+def create_plot(temperature_history, temperature_history_pid, num_steps_lst, errors_lst, steps_for_sum,
+                temp_min, temp_max, graph_height):
+    """Создание графика"""
+    fig = go.Figure()
+
+    # Основные графики
+    fig.add_trace(go.Scatter(
+        x=list(range(len(temperature_history))),
+        y=temperature_history,
+        name='Температура',
+        line=dict(width=2, color='blue')
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=list(range(len(temperature_history_pid))),
+        y=temperature_history_pid,
+        name='ПИД-регулятор охлаждения',
+        line=dict(width=3, dash='dot', color='green')
+    ))
+
+    # Ступени и ошибки ПИД
+    steps_text = []
+    if num_steps_lst:
+        steps_text.append(f"{int(num_steps_lst[0] - temp_min)}")
+        for i in range(1, len(num_steps_lst)):
+            steps_text.append(f"{int(num_steps_lst[i] - temp_min)}" if num_steps_lst[i] != num_steps_lst[i-1] else "")
+
+    fig.add_trace(go.Scatter(
+        x=list(range(len(num_steps_lst))),
+        y=num_steps_lst,
+        name='Ступени ПИД-регулятора',
+        line=dict(width=3, dash='dot', color='orange'),
+        mode="lines+markers+text",
+        text=steps_text,
+        textposition="top center",
+        textfont=dict(size=15, color="black")
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=list(range(len(errors_lst))),
+        y=errors_lst,
+        name='Ошибки ПИД-регулятора',
+        line=dict(width=3, dash='dot', color='red'),
+        visible="legendonly"
+    ))
+
+    # Границы температуры
+    for temp, name, color in [(temp_max, 'Макс.', 'red'), (temp_min, 'Мин.', 'blue')]:
+        fig.add_trace(go.Scatter(
+            x=[0, len(temperature_history)],
+            y=[temp, temp],
+            name=f'{name} температура',
+            line=dict(dash='dash', color=color, width=2)
+        ))
+
+    # Настройка внешнего вида
+    fig.update_layout(
+        xaxis_title={'text': "Время (итерации)", 'font': dict(size=18)},
+        yaxis_title={'text': "Температура (°C)", 'font': dict(size=18)},
+        showlegend=True,
+        legend=dict(font=dict(size=16), yanchor="top", y=0.99, xanchor="right", x=1.15),
+        hovermode="x unified",
+        height=graph_height,
+        margin=dict(t=20, b=20, l=20, r=20),
+        newshape=dict(line_color="red"),
+        modebar_add=["drawline", "drawopenpath", "eraseshape"]
+    )
+
+    fig.add_annotation(
+        x=0.5, y=1.03,
+        xref="paper", yref="paper",
+        text=f"Суммарное количество ступеней: {steps_for_sum}",
+        showarrow=False,
+        font=dict(size=16, color="black")
+    )
+
+    return fig
+
+# Основной интерфейс
 st.title('Температурный контроль')
-
-def to_excel():
-    # Создаем DataFrame с данными температур
-    df_temps = pd.DataFrame({
-        'Время (итерации)': range(len(temperature_history)),
-        'Температура': temperature_history,
-        'Максимальная температура': [temp_max] * len(temperature_history),
-        'Минимальная температура': [temp_min] * len(temperature_history)
-    })
-
-    # Создаем DataFrame с параметрами системы
-    df_params = pd.DataFrame({
-        'Параметр': [
-            'Количество итераций',
-            'Минимальная температура (°C)',
-            'Максимальная температура (°C)',
-            'Начальная температура (°C)',
-            'Целевая температура нагрева (°C)',
-            'Коэффициент нагрева',
-            'Начальная температура нагрева (°C)',
-            'Целевая температура охлаждения (°C)',
-            'Коэффициент охлаждения',
-            'Начальная температура охлаждения (°C)',
-        ],
-        'Значение': [
-            n_iterations,
-            temp_min,
-            temp_max,
-            current_temp,
-            temp_params['heat']['t_out'],
-            temp_params['heat']['k'],
-            temp_params['heat']['T0'],
-            temp_params['cool']['t_out'],
-            temp_params['cool']['k'],
-            temp_params['cool']['T0'],
-        ]
-    })
-
-    # Создаем буфер в памяти для Excel файла
-    buffer = BytesIO()
-    with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-        # Записываем данные на разные листы
-        df_temps.to_excel(writer, sheet_name='Температурный контроль', index=False)
-        df_params.to_excel(writer, sheet_name='Параметры системы', index=False)
-
-        # Получаем объект workbook и worksheet'ы
-        workbook = writer.book
-        worksheet_temps = writer.sheets['Температурный контроль']
-        worksheet_params = writer.sheets['Параметры системы']
-
-        # Добавляем форматирование
-        header_format = workbook.add_format({
-            'bold': True,
-            'text_wrap': True,
-            'valign': 'top',
-            'border': 1
-        })
-
-        # Применяем форматирование к заголовкам на листе температур
-        for col_num, value in enumerate(df_temps.columns.values):
-            worksheet_temps.write(0, col_num, value, header_format)
-            worksheet_temps.set_column(col_num, col_num, 15)
-
-        # Применяем форматирование к заголовкам на листе параметров
-        for col_num, value in enumerate(df_params.columns.values):
-            worksheet_params.write(0, col_num, value, header_format)
-            worksheet_params.set_column(col_num, col_num, 30)  # Увеличиваем ширину для читаемости
-
-    return buffer
-
-# Две колонки: одна для параметров, другая для графика
 col_params, col_graph = st.columns([0.22, 0.78])
+
+# Панель параметров
 with col_params:
     st.markdown('##### Параметры системы')
-    # Параметры симуляции
-    n_iterations = st.slider(
-        'Количество итераций',
-        min_value=10,
-        max_value=500,
-        value=100,
-        step=10,
-        help='Количество шагов моделирования'
-    )
 
-    temp_min = st.slider(
-        'Минимальная температура (°C)',
-        min_value=-13.0,
-        max_value=-6.0,
-        value=-9.0,
-        step=0.1,
-        help='Минимальная допустимая температура'
-    )
+    n_iterations = st.slider('Количество итераций', 10, 500, 100, 10)
+    setpoint_temp = st.slider('Целевая температура (°C)', -13.0, -6.0, -7.5, 0.1)
+    deadband_temp = st.slider('Зона нечувствительности (°C)', 0.0, 10.0, 7.0, 1.0)
 
-    temp_max = st.slider(
-        'Максимальная температура (°C)',
-        min_value=temp_min + 0.1,  # Гарантируем, что temp_max строго больше temp_min
-        max_value=-5.8,
-        value=-6.0 if -6.0 > temp_min else temp_min + 0.1,
-        step=0.1,
-        help='Максимальная температура (должна быть больше минимальной)'
-    )
+    temp_min = setpoint_temp - deadband_temp / 10
+    temp_max = setpoint_temp + deadband_temp / 10
+    current_temp = st.slider('Текущая температура (°C)',
+                           temp_min, temp_max-0.1,
+                           min(max(temp_min, -7.0), temp_max), 0.1)
 
-    current_temp = st.slider(
-        'Текущая температура (°C)',
-        min_value=temp_min,
-        max_value=temp_max,
-        value=min(max(temp_min, -7.0), temp_max),
-        step=0.1,
-        help='Текущая температура системы'
-    )
+    with st.expander("Параметры ПИД-регулятора"):
+        Kp_input = st.number_input("Kp", value=1.0, step=0.1, format="%.3f")
+        Ki_input = st.number_input("Ki", value=1.0, step=0.01, format="%.4f")
+        dt_input = st.number_input("dt", value=1, step=1, min_value=1)
+        # Kd_input = st.number_input("Kd", value=0.0, step=0.01, format="%.3f")
 
-    # Добавляем выбор ступени производительности
-    performance_level = st.radio(
-        "Ступень производительности",
-        options=["Стандартная", "Ступень 1", "Ступень 2", "Ступень 3", "Ступень 4"],
-        index=0,
-        help="Выберите ступень производительности системы"
-    )
-
-
-    # Определяем параметры для разных ступеней производительности
-    PERFORMANCE_PARAMS = {
-        "Стандартная": {
-            'heat': {'k': 0.3},
-            'cool': {'k': 0.3}
-        },
-        "Ступень 1": {
-            'heat': {'k': 0.3},
-            'cool': {'k': 0.03}
-        },
-        "Ступень 2": {
-            'heat': {'k': 0.3},
-            'cool': {'k': 0.06}
-        },
-        "Ступень 3": {
-            'heat': {'k': 0.3},
-            'cool': {'k': 0.09}
-        },
-        "Ступень 4": {
-            'heat': {'k': 0.3},
-            'cool': {'k': 0.12}
-        }
+    # Параметры температуры
+    TEMP_PARAMS = {
+        'heat': {'t_out': -5.8, 'k': 0.3, 'T0': -13.0},
+        'cool': {'t_out': float(temp_min), 'k': float(PERFORMANCE_PARAMS["Стандартная"]['cool']['k']), 'T0': float(temp_max)}
     }
 
     with st.expander("Дополнительные параметры"):
         temp_params = {
             'heat': {
-                't_out': st.number_input(
-                    'Целевая температура нагрева (°C)',
-                    min_value=-15.0,
-                    max_value=0.0,
-                    value=float(TEMP_PARAMS['heat']['t_out']),
-                    step=0.1,
-                    help='Конечная температура нагрева',
-                    key='t_out_heat_input'
-                ),
-                'k': st.number_input(
-                    'Коэффициент нагрева',
-                    min_value=0.01,
-                    max_value=1.0,
-                    value=PERFORMANCE_PARAMS[performance_level]['heat']['k'],
-                    step=0.01,
-                    help='Скорость нагрева',
-                    key='k_heat_input'
-                ),
-                'T0': st.number_input(
-                    'Начальная температура нагрева (°C)',
-                    min_value=-15.0,
-                    max_value=0.0,
-                    value=float(TEMP_PARAMS['heat']['T0']),
-                    step=0.1,
-                    help='Начальная температура для нагрева',
-                    key='T0_heat_input'
-                )
-            },
-            'cool': {
-                't_out': st.number_input(
-                    'Целевая температура охлаждения (°C)',
-                    min_value=-15.0,
-                    max_value=0.0,
-                    value=float(TEMP_PARAMS['cool']['t_out']),
-                    step=0.1,
-                    help='Конечная температура охлаждения',
-                    key='t_out_cool_input'
-                ),
-                'k': st.number_input(
-                    'Коэффициент охлаждения',
-                    min_value=0.01,
-                    max_value=1.0,
-                    value=PERFORMANCE_PARAMS[performance_level]['cool']['k'],
-                    step=0.01,
-                    help='Скорость охлаждения',
-                    key='k_cool_input'
-                ),
-                'T0': st.number_input(
-                    'Начальная температура охлаждения (°C)',
-                    min_value=-15.0,
-                    max_value=0.0,
-                    value=float(TEMP_PARAMS['cool']['T0']),
-                    step=0.1,
-                    help='Начальная температура для охлаждения',
-                    key='T0_cool_input'
-                )
+                't_out': st.number_input('Целевая температура нагрева (°C)', -15.0, 0.0, float(TEMP_PARAMS['heat']['t_out']), 0.1),
+                'k': st.number_input('Коэффициент нагрева', 0.01, 1.0, PERFORMANCE_PARAMS["Стандартная"]['heat']['k'], 0.01),
+                'T0': st.number_input('Начальная температура нагрева (°C)', -15.0, 0.0, float(temp_min), 0.1)
             }
         }
 
-    st.divider()
+# Расчеты
+f_lst_heat = generate_temp_array(TEMP_PARAMS, is_heating=True)
+f_lst_cool = generate_temp_array(TEMP_PARAMS, is_heating=False)
 
-# Создаем массивы температур с обновленными параметрами
-f_lst_heat = generate_temp_array(temp_params, is_heating=True)
-f_lst_cool = generate_temp_array(temp_params, is_heating=False)
-
-# Получаем историю температур
 temperature_history = control_temperature(current_temp, n_iterations, temp_min, temp_max)
 
-with col_params:
-    # Кнопка выгрузки данных
-    if st.button('📥 Выгрузить данные в Excel'):
-        st.download_button(
-            label='📊 Скачать Excel файл',
-            data=to_excel().getvalue(),
-            file_name='temperature_control.xlsx',
-            mime='application/vnd.ms-excel'
-        )
+TEMP_PARAMS_PID = {'cool': {'t_out': temp_min, 'T0': temp_max}}
+temperature_history_pid, num_steps_lst, errors_lst, steps_for_sum = control_temperature_combined(
+    current_temp, n_iterations, temp_min, temp_max,
+    setpoint_temp, Kp_input, Ki_input, TEMP_PARAMS_PID, dt_input
+)
 
-
+# Отображение графика
 with col_graph:
-    # Добавляем слайдер для управления высотой графика
-    graph_height = st.slider(
-        'Высота графика',
-        min_value=400,
-        max_value=800,
-        value=650,
-        step=50,
-        help='Измените высоту графика'
-    )
-
-    # Создаем график с помощью Plotly
-    fig = go.Figure()
-
-    # Определяем цвет линии в зависимости от ступени
-    line_color = 'blue' if performance_level == "Стандартная" else 'red'
-
-    # Добавляем основную линию температуры с соответствующим цветом
-    fig.add_trace(go.Scatter(
-        x=list(range(len(temperature_history))),
-        y=temperature_history,
-        name=f'Температура ({performance_level})',
-        line=dict(width=2, color=line_color)
-    ))
-
-    # Добавляем линии минимальной и максимальной температуры
-    fig.add_trace(go.Scatter(
-        x=[0, len(temperature_history)],
-        y=[temp_max, temp_max],
-        name='Макс. температура',
-        line=dict(dash='dash', color='red', width=2)
-    ))
-
-    fig.add_trace(go.Scatter(
-        x=[0, len(temperature_history)],
-        y=[temp_min, temp_min],
-        name='Мин. температура',
-        line=dict(dash='dash', color='blue', width=2)
-    ))
-
-    # Настраиваем внешний вид графика
-    fig.update_layout(
-        xaxis_title={
-            'text': 'Время (итерации)',
-            'font': dict(size=18)
-        },
-        yaxis_title={
-            'text': 'Температура (°C)',
-            'font': dict(size=18)
-        },
-        showlegend=True,
-        legend=dict(
-            font=dict(size=16),
-            yanchor="top",
-            y=0.99,
-            xanchor="right",
-            x=1.15
-        ),
-        hovermode='x unified',
-        height=graph_height,  # Используем значение из слайдера
-        margin=dict(t=20, b=20, l=20, r=20),
-        # Добавляем возможность рисовать аннотации
-        newshape=dict(line_color='red'),
-        modebar_add=['drawline', 'drawopenpath', 'eraseshape']
-    )
-
-    # Отображаем график на всю ширину контейнера
+    graph_height = st.slider('Высота графика', 400, 800, 650, 50)
+    fig = create_plot(temperature_history, temperature_history_pid, num_steps_lst, errors_lst,
+                     steps_for_sum, temp_min, temp_max, graph_height)
     st.plotly_chart(fig, use_container_width=True)
